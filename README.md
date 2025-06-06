@@ -31,7 +31,7 @@ Um jogo da velha multiplayer em tempo real usando React, Node.js e Socket.IO.
 
 ## 📁 Estrutura do Projeto
 
-\`\`\`
+```
 jogo_da_velha/
 ├── app/                    # Frontend React/Next.js
 │   ├── page.tsx           # Componente principal do jogo
@@ -42,24 +42,24 @@ jogo_da_velha/
 │   └── package.json       # Dependências do servidor
 ├── components/            # Componentes UI (shadcn/ui)
 └── README.md
-\`\`\`
+```
 
 ## 🚀 Como Executar
 
 ### 1. Instalar Dependências do Servidor
 
-\`\`\`bash
+```bash
 cd server
 npm install
-\`\`\`
+```
 
 ### 2. Iniciar o Servidor
 
-\`\`\`bash
+```bash
 npm run dev
 # ou
 npm start
-\`\`\`
+```
 
 O servidor estará rodando em `http://localhost:3001`
 
@@ -67,32 +67,32 @@ O servidor estará rodando em `http://localhost:3001`
 
 No diretório raiz do projeto:
 
-\`\`\`bash
+```bash
 npm install
-\`\`\`
+```
 
 ### 4. Iniciar o Frontend
 
-\`\`\`bash
+```bash
 npm run dev
-\`\`\`
+```
 
 O frontend estará disponível em `http://localhost:3000`
 
 ### 5. Scripts
 Você pode rodar os comandos
 
-\`\`\`bash
+```bash
 bash scripts/install-dependencies.sh
-\`\`\`
+```
 
-\`\`\`bash
+```bash
 bash scripts/setup.sh
-\`\`\`
+```
 
-\`\`\`bash
+```bash
 bash scripts/start-project.sh
-\`\`\`
+```
 
 Para instalar as dependencias e iniciar o projeto, respectivamente.
 
@@ -113,12 +113,6 @@ Você pode configurar as seguintes variáveis:
 
 - `PORT`: Porta do servidor (padrão: 3001)
 - `FRONTEND_URL`: URL do frontend para CORS (padrão: http://localhost:3000)
-
-### Personalização
-
-- **Cores**: Modifique as classes Tailwind CSS no componente principal
-- **Regras**: Ajuste a lógica do jogo no arquivo `server.js`
-- **UI**: Customize os componentes shadcn/ui conforme necessário
 
 ## 📡 Eventos WebSocket
 
