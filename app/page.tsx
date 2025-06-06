@@ -7,9 +7,11 @@ import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
-import { Trophy, Users, Gamepad2, Wifi, WifiOff } from "lucide-react"
+import { Trophy, Users, Gamepad2, Wifi, WifiOff, Plus, DoorOpen } from "lucide-react"
+import { useToast } from "@/components/ui/use-toast"
 
 interface GameState {
+  id: string
   board: (string | null)[]
   currentPlayer: "X" | "O"
   winner: string | null
@@ -18,21 +20,26 @@ interface GameState {
   gameActive: boolean
 }
 
+interface Room {
+  id: string
+  playerCount: number
+  players: string[]
+  gameActive: boolean
+}
+
 export default function TicTacToeGame() {
   const [socket, setSocket] = useState<Socket | null>(null)
   const [playerName, setPlayerName] = useState("")
   const [isConnected, setIsConnected] = useState(false)
   const [connectionError, setConnectionError] = useState(false)
-  const [gameState, setGameState] = useState<GameState>({
-    board: Array(9).fill(null),
-    currentPlayer: "X",
-    winner: null,
-    isDraw: false,
-    players: {},
-    gameActive: false,
-  })
+  const [gameState, setGameState] = useState<GameState | null>(null)
   const [playerId, setPlayerId] = useState("")
   const [waitingForPlayer, setWaitingForPlayer] = useState(false)
+  const [rooms, setRooms] = useState<Room[]>([])
+  const [newRoomId, setNewRoomId] = useState("")
+  const [currentRoom, setCurrentRoom] = useState<string | null>(null)
+  const [isNameConfirmed, setIsNameConfirmed] = useState(false)
+  const { toast } = useToast()
 
   useEffect(() => {
     // Tentar conectar ao servidor
@@ -50,6 +57,8 @@ export default function TicTacToeGame() {
           setIsConnected(true)
           setConnectionError(false)
           setPlayerId(newSocket.id)
+          // Solicitar lista de salas ao conectar
+          newSocket.emit("listRooms")
         })
 
         newSocket.on("connect_error", (error) => {
@@ -61,6 +70,8 @@ export default function TicTacToeGame() {
         newSocket.on("disconnect", () => {
           console.log("Desconectado do servidor")
           setIsConnected(false)
+          setCurrentRoom(null)
+          setGameState(null)
         })
 
         newSocket.on("gameState", (state: GameState) => {
@@ -76,6 +87,30 @@ export default function TicTacToeGame() {
           setGameState(state)
         })
 
+        newSocket.on("roomsList", (roomsList: Room[]) => {
+          setRooms(roomsList)
+        })
+
+        newSocket.on("roomsUpdated", () => {
+          newSocket.emit("listRooms")
+        })
+
+        newSocket.on("roomCreated", (roomId: string) => {
+          toast({
+            title: "Sala criada!",
+            description: `Sala "${roomId}" criada com sucesso.`,
+          })
+          joinRoom(roomId)
+        })
+
+        newSocket.on("error", (message: string) => {
+          toast({
+            variant: "destructive",
+            title: "Erro",
+            description: message,
+          })
+        })
+
         return newSocket
       } catch (error) {
         console.error("Erro ao criar socket:", error)
@@ -88,30 +123,65 @@ export default function TicTacToeGame() {
 
     return () => {
       if (newSocket) {
+        if (currentRoom) {
+          newSocket.emit("leaveRoom", currentRoom)
+        }
         newSocket.close()
       }
     }
   }, [])
 
-  const joinGame = () => {
+  const handleNameSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    const trimmedName = playerName.trim()
+    if (trimmedName.length >= 3) {
+      setPlayerName(trimmedName)
+      setIsNameConfirmed(true)
+    } else {
+      toast({
+        variant: "destructive",
+        title: "Nome inválido",
+        description: "O nome deve ter pelo menos 3 caracteres.",
+      })
+    }
+  }
+
+  const createRoom = () => {
+    if (socket && newRoomId.trim()) {
+      socket.emit("createRoom", newRoomId.trim())
+      setNewRoomId("")
+    }
+  }
+
+  const joinRoom = (roomId: string) => {
     if (socket && playerName.trim()) {
-      socket.emit("joinGame", playerName.trim())
+      socket.emit("joinRoom", { roomId, playerName: playerName.trim() })
+      setCurrentRoom(roomId)
+    }
+  }
+
+  const leaveRoom = () => {
+    if (socket && currentRoom) {
+      socket.emit("leaveRoom", currentRoom)
+      setCurrentRoom(null)
+      setGameState(null)
     }
   }
 
   const makeMove = (index: number) => {
-    if (socket && gameState.gameActive && !gameState.board[index] && !gameState.winner) {
-      socket.emit("makeMove", index)
+    if (socket && currentRoom && gameState?.gameActive && !gameState.board[index] && !gameState.winner) {
+      socket.emit("makeMove", { roomId: currentRoom, index })
     }
   }
 
   const resetGame = () => {
-    if (socket) {
-      socket.emit("resetGame")
+    if (socket && currentRoom) {
+      socket.emit("resetGame", currentRoom)
     }
   }
 
   const renderSquare = (index: number) => {
+    if (!gameState) return null
     const value = gameState.board[index]
     const isWinningSquare = false // You could implement winning square highlighting here
 
@@ -134,6 +204,7 @@ export default function TicTacToeGame() {
   }
 
   const getGameStatus = () => {
+    if (!gameState) return "Selecione uma sala para jogar"
     if (gameState.winner) {
       const winnerName = Object.values(gameState.players).find((p) => p.symbol === gameState.winner)?.name
       return `🎉 ${winnerName} venceu!`
@@ -194,7 +265,7 @@ export default function TicTacToeGame() {
   }
 
   // Tela de entrada
-  if (!gameState.gameActive && Object.keys(gameState.players).length === 0) {
+  if (!isNameConfirmed) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-purple-50 flex items-center justify-center p-4">
         <Card className="w-full max-w-md">
@@ -210,17 +281,26 @@ export default function TicTacToeGame() {
               <Wifi className="w-4 h-4" />
               Conectado ao servidor
             </div>
-            <Input
-              type="text"
-              placeholder="Digite seu nome"
-              value={playerName}
-              onChange={(e) => setPlayerName(e.target.value)}
-              onKeyPress={(e) => e.key === "Enter" && joinGame()}
-              className="text-center"
-            />
-            <Button onClick={joinGame} disabled={!playerName.trim()} className="w-full">
-              Entrar no Jogo
-            </Button>
+            <form onSubmit={handleNameSubmit}>
+              <div className="space-y-4">
+                <Input
+                  type="text"
+                  placeholder="Digite seu nome (mínimo 3 caracteres)"
+                  value={playerName}
+                  onChange={(e) => setPlayerName(e.target.value)}
+                  className="text-center"
+                  minLength={3}
+                  required
+                />
+                <Button 
+                  type="submit" 
+                  disabled={playerName.trim().length < 3} 
+                  className="w-full"
+                >
+                  Continuar
+                </Button>
+              </div>
+            </form>
           </CardContent>
         </Card>
       </div>
@@ -229,7 +309,7 @@ export default function TicTacToeGame() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-purple-50 p-4">
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-6xl mx-auto">
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-gray-800 mb-2 flex items-center justify-center gap-3">
             <Gamepad2 className="w-10 h-10 text-blue-600" />
@@ -238,96 +318,190 @@ export default function TicTacToeGame() {
           <p className="text-gray-600">Jogue em tempo real com WebSocket</p>
         </div>
 
-        <div className="grid md:grid-cols-3 gap-6">
-          {/* Placar */}
-          <Card>
+        <div className="grid lg:grid-cols-4 gap-6">
+          {/* Lista de Salas */}
+          <Card className="lg:col-span-1">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Trophy className="w-5 h-5 text-yellow-600" />
-                Placar
+              <CardTitle className="flex items-center justify-between">
+                <span>Salas</span>
+                <Badge variant="outline">{rooms.length}</Badge>
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3">
-              {Object.entries(gameState.players).map(([id, player]) => (
-                <div key={id} className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Badge variant={player.symbol === "X" ? "default" : "destructive"}>{player.symbol}</Badge>
-                    <span className={`font-medium ${id === playerId ? "text-blue-600" : ""}`}>
-                      {player.name} {id === playerId && "(Você)"}
-                    </span>
-                  </div>
-                  <span className="font-bold text-lg">{player.score}</span>
-                </div>
-              ))}
-              {Object.keys(gameState.players).length < 2 && (
-                <div className="text-center text-gray-500 py-4">
-                  <Users className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                  <p>Aguardando jogadores...</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Tabuleiro */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-center">{getGameStatus()}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-3 gap-2 w-fit mx-auto mb-4">
-                {gameState.board.map((_, index) => renderSquare(index))}
-              </div>
-
-              {(gameState.winner || gameState.isDraw) && (
-                <div className="text-center">
-                  <Button onClick={resetGame} className="w-full">
-                    Jogar Novamente
-                  </Button>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Status do Jogo */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Status</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span>Conexão:</span>
-                <Badge variant={isConnected ? "default" : "destructive"} className="flex items-center gap-1">
-                  {isConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-                  {isConnected ? "Conectado" : "Desconectado"}
-                </Badge>
+            <CardContent className="space-y-4">
+              {/* Criar nova sala */}
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Nome da sala"
+                  value={newRoomId}
+                  onChange={(e) => setNewRoomId(e.target.value)}
+                  onKeyPress={(e) => e.key === "Enter" && createRoom()}
+                />
+                <Button onClick={createRoom} disabled={!newRoomId.trim()} size="icon">
+                  <Plus className="w-4 h-4" />
+                </Button>
               </div>
 
               <Separator />
 
-              <div className="flex items-center justify-between">
-                <span>Jogadores:</span>
-                <Badge variant="outline">{Object.keys(gameState.players).length}/2</Badge>
-              </div>
+              {/* Lista de salas */}
+              <div className="space-y-2">
+                {rooms.map((room) => (
+                  <Card key={room.id} className="p-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="font-medium">{room.id}</h3>
+                        <p className="text-sm text-gray-500">
+                          {room.players.join(" vs ")}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge variant={room.gameActive ? "default" : "secondary"}>
+                          {room.playerCount}/2
+                        </Badge>
+                        {currentRoom !== room.id ? (
+                          <Button
+                            onClick={() => joinRoom(room.id)}
+                            disabled={room.playerCount >= 2}
+                            size="sm"
+                          >
+                            Entrar
+                          </Button>
+                        ) : (
+                          <Button
+                            onClick={leaveRoom}
+                            variant="destructive"
+                            size="sm"
+                          >
+                            Sair
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </Card>
+                ))}
 
-              <Separator />
-
-              <div className="flex items-center justify-between">
-                <span>Jogo Ativo:</span>
-                <Badge variant={gameState.gameActive ? "default" : "secondary"}>
-                  {gameState.gameActive ? "Sim" : "Não"}
-                </Badge>
-              </div>
-
-              {waitingForPlayer && (
-                <div className="text-center py-4">
-                  <div className="animate-pulse text-blue-600">
-                    <Users className="w-8 h-8 mx-auto mb-2" />
-                    <p className="text-sm">Procurando oponente...</p>
+                {rooms.length === 0 && (
+                  <div className="text-center text-gray-500 py-8">
+                    <Users className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                    <p>Nenhuma sala disponível</p>
+                    <p className="text-sm">Crie uma nova sala para começar!</p>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </CardContent>
           </Card>
+
+          <div className="lg:col-span-3">
+            <div className="grid md:grid-cols-2 gap-6">
+              {/* Placar */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Trophy className="w-5 h-5 text-yellow-600" />
+                    Placar
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {gameState && Object.entries(gameState.players).map(([id, player]) => (
+                    <div key={id} className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Badge variant={player.symbol === "X" ? "default" : "destructive"}>{player.symbol}</Badge>
+                        <span className={`font-medium ${id === playerId ? "text-blue-600" : ""}`}>
+                          {player.name} {id === playerId && "(Você)"}
+                        </span>
+                      </div>
+                      <span className="font-bold text-lg">{player.score}</span>
+                    </div>
+                  ))}
+                  {(!gameState || Object.keys(gameState.players).length < 2) && (
+                    <div className="text-center text-gray-500 py-4">
+                      <Users className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                      <p>Aguardando jogadores...</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Status do Jogo */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>Status</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span>Conexão:</span>
+                    <Badge variant={isConnected ? "default" : "destructive"} className="flex items-center gap-1">
+                      {isConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+                      {isConnected ? "Conectado" : "Desconectado"}
+                    </Badge>
+                  </div>
+
+                  <Separator />
+
+                  <div className="flex items-center justify-between">
+                    <span>Sala Atual:</span>
+                    <Badge variant="outline">{currentRoom || "Nenhuma"}</Badge>
+                  </div>
+
+                  <Separator />
+
+                  <div className="flex items-center justify-between">
+                    <span>Jogadores na Sala:</span>
+                    <Badge variant="outline">
+                      {gameState ? Object.keys(gameState.players).length : 0}/2
+                    </Badge>
+                  </div>
+
+                  <Separator />
+
+                  <div className="flex items-center justify-between">
+                    <span>Jogo Ativo:</span>
+                    <Badge variant={gameState?.gameActive ? "default" : "secondary"}>
+                      {gameState?.gameActive ? "Sim" : "Não"}
+                    </Badge>
+                  </div>
+
+                  {waitingForPlayer && (
+                    <div className="text-center py-4">
+                      <div className="animate-pulse text-blue-600">
+                        <Users className="w-8 h-8 mx-auto mb-2" />
+                        <p className="text-sm">Procurando oponente...</p>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Tabuleiro */}
+            <Card className="mt-6">
+              <CardHeader>
+                <CardTitle className="text-center">{getGameStatus()}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {gameState ? (
+                  <>
+                    <div className="grid grid-cols-3 gap-2 w-fit mx-auto mb-4">
+                      {gameState.board.map((_, index) => renderSquare(index))}
+                    </div>
+
+                    {(gameState.winner || gameState.isDraw) && (
+                      <div className="text-center">
+                        <Button onClick={resetGame} className="w-full">
+                          Jogar Novamente
+                        </Button>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="text-center text-gray-500 py-12">
+                    <Gamepad2 className="w-16 h-16 mx-auto mb-4 opacity-50" />
+                    <p className="text-lg">Selecione uma sala para começar a jogar!</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </div>
       </div>
     </div>

@@ -18,14 +18,20 @@ const io = socketIo(server, {
 app.use(cors())
 app.use(express.json())
 
-// Estado do jogo
-const gameState = {
-  board: Array(9).fill(null),
-  currentPlayer: "X",
-  winner: null,
-  isDraw: false,
-  players: {},
-  gameActive: false,
+// Estado dos jogos - cada sala terá seu próprio estado
+const gameRooms = new Map();
+
+// Função para criar uma nova sala
+function createGameRoom(roomId) {
+  return {
+    id: roomId,
+    board: Array(9).fill(null),
+    currentPlayer: "X",
+    winner: null,
+    isDraw: false,
+    players: {},
+    gameActive: false,
+  };
 }
 
 // Função para verificar vitória
@@ -39,126 +45,208 @@ function checkWinner(board) {
     [2, 5, 8], // colunas
     [0, 4, 8],
     [2, 4, 6], // diagonais
-  ]
+  ];
 
   for (const line of lines) {
-    const [a, b, c] = line
+    const [a, b, c] = line;
     if (board[a] && board[a] === board[b] && board[a] === board[c]) {
-      return board[a]
+      return board[a];
     }
   }
-  return null
+  return null;
 }
 
 // Função para verificar empate
 function checkDraw(board) {
-  return board.every((cell) => cell !== null)
+  return board.every((cell) => cell !== null);
 }
 
-// Função para resetar o jogo
-function resetGame() {
-  gameState.board = Array(9).fill(null)
-  gameState.currentPlayer = "X"
-  gameState.winner = null
-  gameState.isDraw = false
-  gameState.gameActive = Object.keys(gameState.players).length === 2
+// Função para resetar o jogo de uma sala específica
+function resetGame(roomId) {
+  const room = gameRooms.get(roomId);
+  if (room) {
+    room.board = Array(9).fill(null);
+    room.currentPlayer = "X";
+    room.winner = null;
+    room.isDraw = false;
+    room.gameActive = Object.keys(room.players).length === 2;
+  }
 }
 
 io.on("connection", (socket) => {
-  console.log(`Jogador conectado: ${socket.id}`)
+  console.log(`Jogador conectado: ${socket.id}`);
 
-  // Jogador entra no jogo
-  socket.on("joinGame", (playerName) => {
-    console.log(`${playerName} entrou no jogo`)
+  // Listar salas disponíveis
+  socket.on("listRooms", () => {
+    const rooms = Array.from(gameRooms.entries()).map(([id, room]) => ({
+      id,
+      playerCount: Object.keys(room.players).length,
+      players: Object.values(room.players).map(p => p.name),
+      gameActive: room.gameActive
+    }));
+    socket.emit("roomsList", rooms);
+  });
 
+  // Criar nova sala
+  socket.on("createRoom", (roomId) => {
+    if (!gameRooms.has(roomId)) {
+      gameRooms.set(roomId, createGameRoom(roomId));
+      socket.emit("roomCreated", roomId);
+      // Atualizar lista de salas para todos
+      io.emit("roomsUpdated");
+    } else {
+      socket.emit("error", "Sala já existe!");
+    }
+  });
+
+  // Jogador entra em uma sala
+  socket.on("joinRoom", ({ roomId, playerName }) => {
+    const room = gameRooms.get(roomId);
+    
+    if (!room) {
+      socket.emit("error", "Sala não encontrada!");
+      return;
+    }
+
+    if (Object.keys(room.players).length >= 2) {
+      socket.emit("error", "Sala cheia!");
+      return;
+    }
+
+    // Remover jogador de outras salas primeiro
+    for (const [id, gameRoom] of gameRooms.entries()) {
+      if (gameRoom.players[socket.id]) {
+        delete gameRoom.players[socket.id];
+        socket.leave(id);
+        io.to(id).emit("gameState", gameRoom);
+        io.emit("roomsUpdated");
+      }
+    }
+
+    // Entrar na nova sala
+    socket.join(roomId);
+    
     // Determinar símbolo do jogador
-    const playerCount = Object.keys(gameState.players).length
-    const symbol = playerCount === 0 ? "X" : "O"
+    const playerCount = Object.keys(room.players).length;
+    const symbol = playerCount === 0 ? "X" : "O";
 
     // Adicionar jogador
-    gameState.players[socket.id] = {
+    room.players[socket.id] = {
       name: playerName,
       symbol: symbol,
       score: 0,
-    }
+    };
 
     // Se temos 2 jogadores, iniciar o jogo
-    if (Object.keys(gameState.players).length === 2) {
-      gameState.gameActive = true
-      io.emit("gameState", gameState)
+    if (Object.keys(room.players).length === 2) {
+      room.gameActive = true;
+      io.to(roomId).emit("gameState", room);
     } else {
-      // Enviar estado atual e sinalizar que está aguardando
-      socket.emit("gameState", gameState)
-      socket.emit("waitingForPlayer")
+      socket.emit("gameState", room);
+      socket.emit("waitingForPlayer");
     }
-  })
+
+    // Atualizar lista de salas para todos
+    io.emit("roomsUpdated");
+  });
 
   // Jogador faz uma jogada
-  socket.on("makeMove", (index) => {
-    const player = gameState.players[socket.id]
+  socket.on("makeMove", ({ roomId, index }) => {
+    const room = gameRooms.get(roomId);
+    if (!room) return;
+
+    const player = room.players[socket.id];
 
     // Verificar se é a vez do jogador e se a jogada é válida
     if (
       !player ||
-      !gameState.gameActive ||
-      player.symbol !== gameState.currentPlayer ||
-      gameState.board[index] !== null ||
-      gameState.winner
+      !room.gameActive ||
+      player.symbol !== room.currentPlayer ||
+      room.board[index] !== null ||
+      room.winner
     ) {
-      return
+      return;
     }
 
     // Fazer a jogada
-    gameState.board[index] = player.symbol
+    room.board[index] = player.symbol;
 
     // Verificar vitória
-    const winner = checkWinner(gameState.board)
+    const winner = checkWinner(room.board);
     if (winner) {
-      gameState.winner = winner
-      gameState.gameActive = false
+      room.winner = winner;
+      room.gameActive = false;
       // Incrementar pontuação do vencedor
-      gameState.players[socket.id].score++
-    } else if (checkDraw(gameState.board)) {
-      gameState.isDraw = true
-      gameState.gameActive = false
+      room.players[socket.id].score++;
+    } else if (checkDraw(room.board)) {
+      room.isDraw = true;
+      room.gameActive = false;
     } else {
       // Alternar jogador
-      gameState.currentPlayer = gameState.currentPlayer === "X" ? "O" : "X"
+      room.currentPlayer = room.currentPlayer === "X" ? "O" : "X";
     }
 
-    // Enviar estado atualizado para todos
-    io.emit("gameState", gameState)
-  })
+    // Enviar estado atualizado para todos na sala
+    io.to(roomId).emit("gameState", room);
+  });
 
   // Resetar jogo
-  socket.on("resetGame", () => {
-    resetGame()
-    io.emit("gameReset", gameState)
-  })
+  socket.on("resetGame", (roomId) => {
+    if (gameRooms.has(roomId)) {
+      resetGame(roomId);
+      io.to(roomId).emit("gameReset", gameRooms.get(roomId));
+    }
+  });
+
+  // Sair da sala
+  socket.on("leaveRoom", (roomId) => {
+    const room = gameRooms.get(roomId);
+    if (room && room.players[socket.id]) {
+      socket.leave(roomId);
+      delete room.players[socket.id];
+      
+      // Se a sala ficou vazia, remover
+      if (Object.keys(room.players).length === 0) {
+        gameRooms.delete(roomId);
+      } else {
+        // Se ainda tem um jogador, resetar o jogo
+        room.gameActive = false;
+        resetGame(roomId);
+        io.to(roomId).emit("gameState", room);
+        io.to(roomId).emit("waitingForPlayer");
+      }
+      
+      // Atualizar lista de salas para todos
+      io.emit("roomsUpdated");
+    }
+  });
 
   // Jogador desconecta
   socket.on("disconnect", () => {
-    console.log(`Jogador desconectado: ${socket.id}`)
+    console.log(`Jogador desconectado: ${socket.id}`);
 
-    if (gameState.players[socket.id]) {
-      delete gameState.players[socket.id]
-
-      // Se não há jogadores suficientes, parar o jogo
-      if (Object.keys(gameState.players).length < 2) {
-        gameState.gameActive = false
-        resetGame()
-      }
-
-      // Notificar jogadores restantes
-      io.emit("gameState", gameState)
-
-      // Se sobrou apenas 1 jogador, ele deve aguardar
-      if (Object.keys(gameState.players).length === 1) {
-        io.emit("waitingForPlayer")
+    // Remover jogador de todas as salas que participava
+    for (const [roomId, room] of gameRooms.entries()) {
+      if (room.players[socket.id]) {
+        delete room.players[socket.id];
+        
+        // Se a sala ficou vazia, remover
+        if (Object.keys(room.players).length === 0) {
+          gameRooms.delete(roomId);
+        } else {
+          // Se ainda tem um jogador, resetar o jogo
+          room.gameActive = false;
+          resetGame(roomId);
+          io.to(roomId).emit("gameState", room);
+          io.to(roomId).emit("waitingForPlayer");
+        }
       }
     }
-  })
-})
+
+    // Atualizar lista de salas para todos
+    io.emit("roomsUpdated");
+  });
+});
 
 const PORT = process.env.PORT || 3001
 server.listen(PORT, () => {

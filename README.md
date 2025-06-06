@@ -1,6 +1,6 @@
 # Jogo da Velha Online com WebSocket
 
-Um jogo da velha multiplayer em tempo real usando React, Node.js e Socket.IO.
+Um jogo da velha multiplayer em tempo real usando React, Node.js e Socket.IO, com suporte a múltiplas salas de jogo simultâneas.
 
 ## O que é WebSocket?
 `WebSocket` é um protocolo de comunicação que permite a transmissão de dados bidirecional entre cliente e servidor por meio de uma conexão persistente. Diferente do modelo tradicional HTTP, onde o cliente precisa fazer uma requisição para obter uma resposta, o WebSocket mantém a conexão aberta, permitindo que servidor e cliente troquem mensagens em tempo real, sem a necessidade de recarregar a página.
@@ -15,95 +15,86 @@ Esse protocolo é ideal para aplicações que exigem interatividade instantânea
 ## Como o WebSocket funciona neste projeto
 Este projeto utiliza a biblioteca Socket.IO para estabelecer uma comunicação em tempo real entre os jogadores, através de eventos WebSocket personalizados. Isso permite que os jogadores joguem simultaneamente com atualizações instantâneas.
 
-A comunicação entre cliente e servidor é feita principalmente por meio de três tipos de eventos:
+A comunicação entre cliente e servidor é feita principalmente por meio dos seguintes tipos de eventos:
 
-### 1. Jogador entra no jogo
+### 1. Gerenciamento de Salas
 
-Assim que um jogador acessa o jogo e informa seu nome, o frontend emite:
+Quando um usuário acessa o jogo, ele pode:
 
 ```javascript
-socket.emit("joinGame", nomeDoJogador)
+// Listar salas disponíveis
+socket.emit("listRooms")
+
+// Criar uma nova sala
+socket.emit("createRoom", nomeDaSala)
+
+// Entrar em uma sala
+socket.emit("joinRoom", { roomId, playerName })
+
+// Sair de uma sala
+socket.emit("leaveRoom", roomId)
 ```
 
-O servidor escuta esse evento com:
+O servidor responde com:
 
 ```javascript
-socket.on("joinGame", (playerName) => {
-  // Adiciona o jogador, define o símbolo (X ou O) e inicia o jogo
+// Lista de salas atualizada
+socket.on("roomsList", (salas) => {
+  // Atualiza interface com lista de salas
+})
+
+// Confirmação de sala criada
+socket.on("roomCreated", (roomId) => {
+  // Sala criada com sucesso
+})
+
+// Erro (sala já existe, sala cheia, etc)
+socket.on("error", (mensagem) => {
+  // Exibe mensagem de erro
 })
 ```
-Se for o segundo jogador, o jogo começa automaticamente. Caso contrário, o jogador vê a mensagem `Aguardando outro jogador`.
-
 
 ### 2. Jogador faz uma jogada
 
-Quando um jogador clica em uma célula do tabuleiro, o frontend envia ao servidor a posição escolhida:
+Quando um jogador clica em uma célula do tabuleiro:
 
 ```javascript
-socket.emit("makeMove", index)
+socket.emit("makeMove", { roomId, index })
 ```
 
-O servidor recebe esse evento, processa a jogada e atualiza o estado do jogo:
+O servidor processa a jogada e atualiza o estado:
 
 ```javascript
-socket.on("makeMove", (index) => {
+socket.on("makeMove", ({ roomId, index }) => {
   // Valida a jogada, atualiza o tabuleiro, checa vitória ou empate
-  // Emite o estado do jogo para todos os jogadores
-})
-```
-
-Em seguida, o servidor envia o estado atualizado para todos com:
-```javascript
-io.emit("gameState", gameState)
-```
-
-No frontend, isso é recebido com:
-```javascript
-socket.on("gameState", (estado) => {
-  // Atualiza a interface do tabuleiro e exibe o vencedor ou empate
+  // Emite o estado do jogo para todos os jogadores na sala
 })
 ```
 
 ### 3. Reinício da partida
-Se os jogadores quiserem começar uma nova rodada, um deles pode clicar em “Jogar Novamente”, e o frontend envia:
+Para começar uma nova rodada na mesma sala:
 
 ```javascript
-socket.emit("resetGame")
+socket.emit("resetGame", roomId)
 ```
 
-O servidor reinicia o estado do jogo com:
+O servidor reinicia o estado do jogo:
 
 ```javascript
-socket.on("resetGame", () => {
-  resetGame()
-  io.emit("gameReset", gameState)
+socket.on("resetGame", (roomId) => {
+  resetGame(roomId)
+  io.to(roomId).emit("gameReset", gameState)
 })
 ```
 
-E no cliente:
-
-```javascript
-socket.on("gameReset", (novoEstado) => {
-  // Limpa o tabuleiro e inicia uma nova partida
-})
-```
-
-
-### 4. Desconexão de jogador
-Quando um jogador fecha a aba ou sai do jogo, o servidor automaticamente detecta isso:
+### 4. Desconexão e Reconexão
+O sistema gerencia automaticamente desconexões:
 
 ```javascript
 socket.on("disconnect", () => {
-  // Remove o jogador e reinicia o jogo, se necessário
-  io.emit("gameState", gameState)
-})
-```
-
-Se restar apenas um jogador, ele verá a mensagem de que está aguardando um novo oponente:
-
-```javascript
-socket.on("waitingForPlayer", () => {
-  // Exibe no frontend uma mensagem aguardando o segundo jogador
+  // Remove jogador das salas
+  // Notifica outros jogadores
+  // Atualiza estado das salas
 })
 ```
 
@@ -111,46 +102,44 @@ socket.on("waitingForPlayer", () => {
 
 ```mermaid
 sequenceDiagram
-    participant Jogador 1
+    participant Jogador
     participant Servidor
-    participant Jogador 2
+    participant Sala
 
-    Jogador 1->>Servidor: joinGame("Alice")
-    Servidor-->>Jogador 1: gameState (aguardando outro jogador)
-    Servidor-->>Jogador 1: waitingForPlayer
+    Jogador->>Servidor: listRooms()
+    Servidor-->>Jogador: roomsList (salas disponíveis)
 
-    Jogador 2->>Servidor: joinGame("Bob")
-    Servidor-->>Jogador 1: gameState (jogo iniciado)
-    Servidor-->>Jogador 2: gameState (jogo iniciado)
+    Jogador->>Servidor: createRoom("Sala 1")
+    Servidor->>Sala: Criar nova sala
+    Servidor-->>Jogador: roomCreated + gameState
 
-    Jogador 1->>Servidor: makeMove(0)
-    Servidor-->>Todos: gameState (tabuleiro atualizado)
-
-    Jogador 2->>Servidor: makeMove(4)
-    Servidor-->>Todos: gameState (tabuleiro atualizado)
+    Jogador->>Servidor: joinRoom({ roomId, playerName })
+    Servidor->>Sala: Adicionar jogador
+    Servidor-->>Sala: Broadcast gameState
 
     loop Jogadas
-        Jogador X->>Servidor: makeMove(index)
-        Servidor-->>Todos: gameState
+        Jogador->>Servidor: makeMove({ roomId, index })
+        Servidor->>Sala: Atualizar estado
+        Servidor-->>Sala: Broadcast gameState
     end
 
-    alt Vitória
-        Servidor-->>Todos: gameState (com vencedor)
-    else Empate
-        Servidor-->>Todos: gameState (empate)
+    alt Vitória/Empate
+        Servidor-->>Sala: gameState (fim de jogo)
+        Jogador->>Servidor: resetGame(roomId)
+        Servidor->>Sala: Reiniciar jogo
+        Servidor-->>Sala: Broadcast gameReset
     end
 
-    Jogador 1->>Servidor: resetGame()
-    Servidor-->>Todos: gameReset (jogo reiniciado)
-
-    Jogador 2--xServidor: desconecta
-    Servidor-->>Jogador 1: gameState (reiniciado)
-    Servidor-->>Jogador 1: waitingForPlayer
+    Jogador->>Servidor: leaveRoom(roomId)
+    Servidor->>Sala: Remover jogador
+    Servidor-->>Sala: Broadcast gameState
 ```
-
 
 ## 🚀 Funcionalidades
 
+- ✅ Múltiplas salas de jogo simultâneas
+- ✅ Sistema de criação e gerenciamento de salas
+- ✅ Lista de salas disponíveis em tempo real
 - ✅ Jogo da velha multiplayer em tempo real
 - ✅ WebSocket para comunicação instantânea
 - ✅ Sistema de placar com contagem de vitórias
@@ -246,11 +235,13 @@ Para instalar as dependencias e iniciar o projeto, respectivamente.
 ## 🎮 Como Jogar
 
 1. Acesse `http://localhost:3000`
-2. Digite seu nome e clique em `Entrar no Jogo`
-3. Aguarde outro jogador se conectar
-4. Jogue alternadamente clicando nas células do tabuleiro
-5. O placar é atualizado automaticamente após cada partida
-6. Clique em `Jogar Novamente` para uma nova partida
+2. Digite seu nome
+3. Crie uma nova sala ou entre em uma sala existente
+4. Aguarde outro jogador se conectar à mesma sala
+5. Jogue alternadamente clicando nas células do tabuleiro
+6. O placar é atualizado automaticamente após cada partida
+7. Clique em `Jogar Novamente` para uma nova partida na mesma sala
+8. Use o botão `Sair` para deixar a sala atual
 
 ## 📡 Eventos WebSocket
 
