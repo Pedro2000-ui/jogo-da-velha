@@ -254,3 +254,6 @@ Para instalar as dependencias e iniciar o projeto, respectivamente.
 - `gameState(state)`: Estado completo do jogo
 - `waitingForPlayer()`: Aguardando outro jogador
 - `gameReset(state)`: Jogo foi resetado
+
+### Demonstração
+[Assista ao vídeo no YouTube](https://youtu.be/Dy7C7IFmff8?si=HRZtAxDUkj7e6woS)
